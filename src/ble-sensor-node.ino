@@ -27,7 +27,6 @@ const byte qwiicAddress = 0x30;
 float dBnumber = 0.0;
 int sensorErrorCount;
 String deviceName = "Argon_1";
-// String hostname = "a3a3-2401-7400-c80a-91c5-cc3d-3627-3f-f856.ap.ngrok.io";
 byte server[] = { 192, 168, 100, 100 };
 int port = 8888;
 bool singleMeasurement = false;
@@ -200,15 +199,6 @@ void readPublishSensors()
 	Serial.print("Collated:");
 	Serial.println(writerData.dataSize());
 	Serial.println(dataString);
-	// String httpReq = "GET /add?d=";
-	// httpReq.concat(dataString);
-	// httpReq.concat(" HTTP/1.0");
-	// String hostReq = "Host: ";
-	// hostReq.concat(hostname);
-	// serverClient.connect(hostname, port);
-	// serverClient.println(httpReq);
-	// serverClient.println(hostReq);
-	// serverClient.println();
 	serverClient.connect(server, port);
 	serverClient.print(dataString);
 
