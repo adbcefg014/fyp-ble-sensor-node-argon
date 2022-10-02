@@ -9,7 +9,7 @@
 #include <Adafruit_VEML6070.h>
 #include <sps30.h>	// https://github.com/paulvha/sps30 , line 190 edited
 
-SYSTEM_MODE(SEMI_AUTOMATIC);
+SYSTEM_MODE(MANUAL);
 SYSTEM_THREAD(ENABLED);
 
 BH1750 bh;
@@ -21,14 +21,16 @@ uint16_t ADC_VALUE = 0;
 SystemSleepConfiguration sleepConfig;
 TCPClient serverClient;
 
+String deviceName = "Argon_4";
+String deviceID = "D5:30:AD:C8:5F:88";
+byte server[] = { 192, 168, 100, 100 };
+int port = 8888;
+
 const char* serviceUuid = "58F75BE1-6DF6-4273-9627-CA053E89771B";
 const char* sensorMode  = "58F75BE2-6DF6-4273-9627-CA053E89771B";
 const byte qwiicAddress = 0x30;
 float dBnumber = 0.0;
 int sensorErrorCount;
-String deviceName = "Argon_1";
-byte server[] = { 192, 168, 100, 100 };
-int port = 8888;
 bool singleMeasurement = false;
 bool continuousMeasurement = false;
 
@@ -60,7 +62,7 @@ void setup() {
 	pinMode(D7,OUTPUT);
 	Particle.connect();
 	Wire.begin();
-	Serial.begin();
+	// Serial.begin();
 	sensorErrorCount = 0;
 	initializeSensors();
 
@@ -96,9 +98,9 @@ void loop() {
 	// Sensor data reading startup
 	WiFi.on();
 	WiFi.connect();
-	Serial.begin();
+	// Serial.begin();
     sps30.wakeup();
-    delay(10);
+    delay(200);
     sps30.start();
     delay(30s);
 
@@ -112,13 +114,15 @@ void loop() {
 
 	// Shut down
     sps30.stop();
-    delay(10);
+    delay(200);
+	sps30.reset();
+    delay(200);
     sps30.sleep();
 	WiFi.off();
 
 	endOfLoopIteration:
+    	delay(100);
 		digitalWrite(D7,LOW);
-	
 }
 
 /* HELPER FUNCTIONS START */
@@ -129,7 +133,7 @@ void initializeSensors()
 	while (!bh.begin()) 
 	{
 		delay(1s);
-		Serial.println("Trying to connect BH1750 Lux Sensor");
+		// Serial.println("Trying to connect BH1750 Lux Sensor");
 		sensorErrorCount++;
 		checkErrorReset();
 	}
@@ -139,7 +143,7 @@ void initializeSensors()
 	while (!bme.begin()) 
 	{
 		delay(1s);
-		Serial.println("Trying to connect BME280 PTH Sensor");
+		// Serial.println("Trying to connect BME280 PTH Sensor");
 		sensorErrorCount++;
 		checkErrorReset();
 	}
@@ -153,7 +157,7 @@ void initializeSensors()
 	while (!airSensor.begin()) 
 	{
 		delay(1s);
-		Serial.println("Trying to connect SCD30 CO2 Sensor");
+		// Serial.println("Trying to connect SCD30 CO2 Sensor");
 		sensorErrorCount++;
 		checkErrorReset();
 	}
@@ -165,7 +169,7 @@ void initializeSensors()
 	while (!sps30.begin(SP30_COMMS)) 
 	{
 		delay(1s);
-		Serial.println("Trying to connect Particulate SPS30 Sensor");
+		// Serial.println("Trying to connect Particulate SPS30 Sensor");
 		sensorErrorCount++;
 		checkErrorReset();
 	}
@@ -174,7 +178,7 @@ void initializeSensors()
 
 	// Zio Qwiic Loudness Sensor Master
 	qwiicTestForConnectivity();
-	Serial.println("Zio Qwiic Loudness Sensor Master Awake");
+	// Serial.println("Zio Qwiic Loudness Sensor Master Awake");
 
 	// VEML6070 UV Level Sensor
 	uv.begin(VEML6070_1_T);
@@ -182,23 +186,23 @@ void initializeSensors()
 
 void readPublishSensors() 
 {
-	Serial.println("read & publish sensors start");
+	// Serial.println("read & publish sensors start");
 	// Get sensor readings & write to data buffer in memory
 	char *dataString = (char *) malloc(500);
 	JSONBufferWriter writerData(dataString, 499);
     writerData.beginArray();
-	writerData.value(deviceName);
+	writerData.value(deviceID);
     writerData = getSensorReadings(writerData);
 
 	// End sensor reading
     writerData.endArray();
 	writerData.buffer()[std::min(writerData.bufferSize(), writerData.dataSize())] = 0;
-	Serial.println("taken sensor reading");
+	// Serial.println("taken sensor reading");
 
 	// Publish collated sensor data string
-	Serial.print("Collated:");
-	Serial.println(writerData.dataSize());
-	Serial.println(dataString);
+	// Serial.print("Collated:");
+	// Serial.println(writerData.dataSize());
+	// Serial.println(dataString);
 	serverClient.connect(server, port);
 	serverClient.print(dataString);
 
@@ -269,7 +273,7 @@ void qwiicTestForConnectivity()
 	//check here for an ACK from the slave, if no ACK don't allow change?
 	if (Wire.endTransmission() != 0) 
 	{
-		Serial.println("Check connections. No slave attached.");
+		// Serial.println("Check connections. No slave attached.");
 		while (1);
 	}
 	return;
