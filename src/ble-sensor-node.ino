@@ -69,7 +69,6 @@ void setup() {
 	sensorErrorCount = 0;
 	initializeSensors();
 
-	BLE.selectAntenna(BleAntennaType::EXTERNAL);
 	BleUuid bleService(serviceUuid);
 	BleCharacteristic modeCharacteristic("sensorMode", BleCharacteristicProperty::WRITE_WO_RSP, sensorMode, serviceUuid, onDataReceived, (void*)sensorMode);
 	BLE.addCharacteristic(modeCharacteristic);
