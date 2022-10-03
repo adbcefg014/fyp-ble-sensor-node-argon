@@ -12,50 +12,53 @@
 SYSTEM_MODE(MANUAL);
 SYSTEM_THREAD(ENABLED);
 
-BH1750 bh;
-Adafruit_BME280 bme;
-SCD30 airSensor;
-SPS30 sps30;
-Adafruit_VEML6070 uv = Adafruit_VEML6070();
-uint16_t ADC_VALUE = 0;
+/* GLOBAL DECLARATIONS */
+int sensorErrorCount;
+void initializeSensors();
+void checkErrorReset();
+void readPublishSensors();
+bool measurementCommand();
 SystemSleepConfiguration sleepConfig;
+JSONBufferWriter getSensorReadings(JSONBufferWriter writerData);
+// TCP Client stuff
 TCPClient serverClient;
-
 String deviceName = "Argon_4";
 String deviceID = "D5:30:AD:C8:5F:88";
 byte server[] = { 192, 168, 100, 100 };
 int port = 8888;
-
+// BLE Stuff
 const char* serviceUuid = "58F75BE1-6DF6-4273-9627-CA053E89771B";
 const char* sensorMode  = "58F75BE2-6DF6-4273-9627-CA053E89771B";
-const byte qwiicAddress = 0x30;
-float dBnumber = 0.0;
-int sensorErrorCount;
 bool singleMeasurement = false;
 bool continuousMeasurement = false;
-
-#define SEALEVELPRESSURE_HPA (1013.25)
+// BH1750 Lux Sensor
+BH1750 bh;
+// BME280 PTH Sensor
+Adafruit_BME280 bme;
 #define BME_ADDRESS 0x77
+#define SEALEVELPRESSURE_HPA (1013.25)
+// SCD30 CO2 Sensor
+SCD30 airSensor;
+// Particulate sensor SPS30
+SPS30 sps30;
 #define SP30_COMMS I2C_COMMS
 #define AUTOCLEANINTERVAL 604800
 #define TX_PIN 0
 #define RX_PIN 0
 #define DEBUG 0
-#define COMMAND_GET_VALUE 0x05
-#define COMMAND_NOTHING_NEW 0x99
-#define ONE_DAY_MILLIS (24 * 60 * 60 * 1000)
-
-
-void initializeSensors();
-JSONBufferWriter getSensorReadings(JSONBufferWriter writerData);
+JSONBufferWriter readSPS30(JSONBufferWriter writerData);
+// VEML6070 UV Level Sensor
+Adafruit_VEML6070 uv = Adafruit_VEML6070();
+// Zio Qwiic Loudness Sensor
+uint16_t ADC_VALUE = 0;
+const byte qwiicAddress = 0x30;
+float dBnumber = 0.0;
 void qwiicTestForConnectivity();
 void qwiicGetValue();
-JSONBufferWriter readSPS30(JSONBufferWriter writerData);
-void goSleep();
-void syncClock();
-void checkErrorReset();
-void readPublishSensors();
-bool measurementCommand();
+#define COMMAND_GET_VALUE 0x05
+#define COMMAND_NOTHING_NEW 0x99
+/* END GLOBAL DECLARATIONS */
+
 
 // setup() runs once, when the device is first turned on.
 void setup() {
