@@ -122,9 +122,9 @@ void loop() {
     delay(200);
     sps30.sleep();
 	WiFi.off();
+	delay(100);
 
 	endOfLoopIteration:
-    	delay(100);
 		digitalWrite(D7,LOW);
 }
 
