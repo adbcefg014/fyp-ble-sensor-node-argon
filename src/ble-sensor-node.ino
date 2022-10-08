@@ -23,7 +23,6 @@ JSONBufferWriter getSensorReadings(JSONBufferWriter writerData);
 // TCP Client stuff
 TCPClient serverClient;
 String deviceName = "Argon_4";
-String deviceID = "D5:30:AD:C8:5F:88";
 byte server[] = { 192, 168, 100, 100 };
 int port = 8888;
 // BLE Stuff
@@ -194,7 +193,7 @@ void readPublishSensors()
 	char *dataString = (char *) malloc(500);
 	JSONBufferWriter writerData(dataString, 499);
     writerData.beginArray();
-	writerData.value(deviceID);
+	writerData.value(deviceName);
     writerData = getSensorReadings(writerData);
 
 	// End sensor reading
