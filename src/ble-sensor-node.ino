@@ -7,7 +7,7 @@
 #include <Adafruit_BME280.h>
 #include <SparkFun_SCD30_Arduino_Library.h>
 #include <Adafruit_VEML6070.h>
-#include <sps30.h>	// https://github.com/paulvha/sps30 , line 190 edited
+#include <SensirionI2CSen5x.h>	
 
 SYSTEM_MODE(MANUAL);
 SYSTEM_THREAD(ENABLED);
@@ -22,14 +22,15 @@ SystemSleepConfiguration sleepConfig;
 JSONBufferWriter getSensorReadings(JSONBufferWriter writerData);
 // TCP Client stuff
 TCPClient serverClient;
-String deviceName = "Argon_4";
+String deviceName = "NodeC";
 byte server[] = { 192, 168, 100, 100 };
 int port = 8888;
 // BLE Stuff
 const char* serviceUuid = "58F75BE1-6DF6-4273-9627-CA053E89771B";
 const char* sensorMode  = "58F75BE2-6DF6-4273-9627-CA053E89771B";
-bool singleMeasurement = false;
-bool continuousMeasurement = false;
+bool measureCommand = false;
+bool sensorOffAfter = true;
+bool sensorOn = false;
 // BH1750 Lux Sensor
 BH1750 bh;
 // BME280 PTH Sensor
@@ -38,20 +39,15 @@ Adafruit_BME280 bme;
 #define SEALEVELPRESSURE_HPA (1013.25)
 // SCD30 CO2 Sensor
 SCD30 airSensor;
-// Particulate sensor SPS30
-SPS30 sps30;
-#define SP30_COMMS I2C_COMMS
-#define AUTOCLEANINTERVAL 604800
-#define TX_PIN 0
-#define RX_PIN 0
-#define DEBUG 0
-JSONBufferWriter readSPS30(JSONBufferWriter writerData);
+// Particulate sensor SEN55
+SensirionI2CSen5x sen5x;
 // VEML6070 UV Level Sensor
 Adafruit_VEML6070 uv = Adafruit_VEML6070();
 // Zio Qwiic Loudness Sensor
 uint16_t ADC_VALUE = 0;
-const byte qwiicAddress = 0x30;
+const byte qwiicAddress = 0x38;
 float dBnumber = 0.0;
+float adcNumber = 0.0;
 void qwiicTestForConnectivity();
 void qwiicGetValue();
 #define COMMAND_GET_VALUE 0x05
@@ -62,12 +58,15 @@ void qwiicGetValue();
 // setup() runs once, when the device is first turned on.
 void setup() {
 	pinMode(D7,OUTPUT);
-	Particle.connect();
 	Wire.begin();
-	// Serial.begin();
+	Serial.begin();
+	Serial1.begin(115200);
 	sensorErrorCount = 0;
+	delay(10s);
+	Serial.println("Setup start");
 	initializeSensors();
 
+	// BLE
 	BleUuid bleService(serviceUuid);
 	BleCharacteristic modeCharacteristic("sensorMode", BleCharacteristicProperty::WRITE_WO_RSP, sensorMode, serviceUuid, onDataReceived, (void*)sensorMode);
 	BLE.addCharacteristic(modeCharacteristic);
@@ -78,8 +77,8 @@ void setup() {
 
 	// Wait for background tasks and sensor initialization to finish
 	delay(20s);
-	sps30.sleep();
 	sleepConfig.mode(SystemSleepMode::ULTRA_LOW_POWER).ble();
+	Serial.println("Setup end");
 }
 
 // loop() runs over and over again, as quickly as it can execute. Main Program flow goes here!
@@ -100,28 +99,28 @@ void loop() {
 	// Sensor data reading startup
 	WiFi.on();
 	WiFi.connect();
-	// Serial.begin();
-    sps30.wakeup();
-    delay(200);
-    sps30.start();
-    delay(30s);
-
-    // Sensor reading decision
-	while (measurementCommand())
+	if (!sensorOn)
 	{
-		delay(6s);	// 5s + 1s due to clock on SCD30 being slightly slower
-		readPublishSensors();
-		singleMeasurement = false;
+		// Wake up components that sleep
+		sen5x.startMeasurement();
+		Serial1.println("AT+GPS=1");
+		Serial1.println("AT+GPSRD=20");
+		sensorOn = true;
+		delay(20s);
 	}
+	delay(10s);
+	readPublishSensors();
 
 	// Shut down
-    sps30.stop();
-    delay(200);
-	sps30.reset();
-    delay(200);
-    sps30.sleep();
+	measureCommand = false;
+	if (sensorOffAfter)
+	{
+		sen5x.stopMeasurement();
+		Serial1.println("AT+GPS=0");
+		sensorOn = false;
+	}
 	WiFi.off();
-	delay(100);
+	delay(5s);
 
 	endOfLoopIteration:
 		digitalWrite(D7,LOW);
@@ -135,7 +134,7 @@ void initializeSensors()
 	while (!bh.begin()) 
 	{
 		delay(1s);
-		// Serial.println("Trying to connect BH1750 Lux Sensor");
+		Serial.println("Trying to connect BH1750 Lux Sensor");
 		sensorErrorCount++;
 		checkErrorReset();
 	}
@@ -145,7 +144,7 @@ void initializeSensors()
 	while (!bme.begin()) 
 	{
 		delay(1s);
-		// Serial.println("Trying to connect BME280 PTH Sensor");
+		Serial.println("Trying to connect BME280 PTH Sensor");
 		sensorErrorCount++;
 		checkErrorReset();
 	}
@@ -159,52 +158,49 @@ void initializeSensors()
 	while (!airSensor.begin()) 
 	{
 		delay(1s);
-		// Serial.println("Trying to connect SCD30 CO2 Sensor");
+		Serial.println("Trying to connect SCD30 CO2 Sensor");
 		sensorErrorCount++;
 		checkErrorReset();
 	}
 	airSensor.setMeasurementInterval(5);
   	airSensor.setAutoSelfCalibration(true);
 
-	// Particulate sensor SPS30
-	sps30.EnableDebugging(DEBUG);
-	while (!sps30.begin(SP30_COMMS)) 
-	{
-		delay(1s);
-		// Serial.println("Trying to connect Particulate SPS30 Sensor");
-		sensorErrorCount++;
-		checkErrorReset();
-	}
-	sps30.SetAutoCleanInt(AUTOCLEANINTERVAL);
-	sps30.reset();
+	// Particulate sensor SEN55
+	sen5x.begin(Wire);
+	float tempOffset = 0.0;
+	sen5x.setTemperatureOffsetSimple(tempOffset);
 
 	// Zio Qwiic Loudness Sensor Master
 	qwiicTestForConnectivity();
-	// Serial.println("Zio Qwiic Loudness Sensor Master Awake");
+	Serial.println("Zio Qwiic Loudness Sensor Master Awake");
 
 	// VEML6070 UV Level Sensor
 	uv.begin(VEML6070_1_T);
+
+	// A9G GPS
+	Serial1.println("AT+RST=1");
 }
 
 void readPublishSensors() 
 {
-	// Serial.println("read & publish sensors start");
+	Serial.println("read & publish sensors start");
 	// Get sensor readings & write to data buffer in memory
-	char *dataString = (char *) malloc(500);
-	JSONBufferWriter writerData(dataString, 499);
-    writerData.beginArray();
-	writerData.value(deviceName);
-    writerData = getSensorReadings(writerData);
-
-	// End sensor reading
-    writerData.endArray();
+	// 		Data formatting is as follows:
+	// 		[deviceId, sensorData(in JSON format)]
+	char *dataString = (char *) malloc(1500);
+	JSONBufferWriter writerData(dataString, 1499);
+	writerData.beginArray().value(deviceName);
+		writerData.beginObject();
+		writerData = getSensorReadings(writerData);
+		writerData.endObject();
+	writerData.endArray();
 	writerData.buffer()[std::min(writerData.bufferSize(), writerData.dataSize())] = 0;
-	// Serial.println("taken sensor reading");
 
 	// Publish collated sensor data string
-	// Serial.print("Collated:");
-	// Serial.println(writerData.dataSize());
-	// Serial.println(dataString);
+	Serial.print("Collated:");
+	Serial.println(writerData.dataSize());
+	Serial.println(dataString);
+	waitUntil(WiFi.ready);
 	serverClient.connect(server, port);
 	serverClient.print(dataString);
 
@@ -217,34 +213,73 @@ void readPublishSensors()
 JSONBufferWriter getSensorReadings(JSONBufferWriter writerData)
 {
 	// LUX Sensor (BH1750)
-	bh.make_forced_measurement();					// default 4 decimal place
-	writerData.value(bh.get_light_level());
+	bh.make_forced_measurement();
+	writerData.name("lux").value(bh.get_light_level());
 
 	// Peak Sound Sensor (SPARKFUN SEN-15892)
 	qwiicGetValue();
-	writerData.value(dBnumber);
+	writerData.name("loudness").beginObject();
+		writerData.name("adc").value(adcNumber);	
+		writerData.name("db").value(dBnumber);
+	writerData.endObject();
 
 	// UV Sensor (VEML 6070)
-	writerData.value(uv.readUV());					// default whole numbers
+	writerData.name("UV").value(uv.readUV());
 
 	// Pressure, Temperature, Humidity Sensor (BME280)
-	writerData.value(bme.readPressure());			// default 2 decimal place
-	writerData.value(bme.readTemperature());		// default 2 decimal place
-	writerData.value(bme.readHumidity());			// default 4 decimal place
+	writerData.name("bme280").beginObject();
+		writerData.name("P").value(bme.readPressure());
+		writerData.name("T").value(bme.readTemperature());	
+		writerData.name("H").value(bme.readHumidity());	
+	writerData.endObject();
 
-	// Particulate Sensor (SPS30)
-	writerData = readSPS30(writerData);				// default 5 decimal place
-	sps30.sleep();
+	// Particulate Sensor (SEN55)
+	float massConcentrationPm1p0;
+    float massConcentrationPm2p5;
+    float massConcentrationPm4p0;
+    float massConcentrationPm10p0;
+    float ambientHumidity;
+    float ambientTemperature;
+    float vocIndex;
+    float noxIndex;
+	sen5x.readMeasuredValues(
+        massConcentrationPm1p0, massConcentrationPm2p5, massConcentrationPm4p0,
+        massConcentrationPm10p0, ambientHumidity, ambientTemperature, vocIndex,
+        noxIndex);
+	writerData.name("sen55").beginObject();
+		writerData.name("PM1p0").value(massConcentrationPm1p0);
+		writerData.name("PM2p5").value(massConcentrationPm2p5);
+		writerData.name("PM4p0").value(massConcentrationPm4p0);
+		writerData.name("PM10p0").value(massConcentrationPm10p0);
+		writerData.name("H").value(ambientHumidity);
+		writerData.name("T").value(ambientTemperature);
+		writerData.name("voc").value(vocIndex);
+		writerData.name("nox").value(noxIndex);
+	writerData.endObject();
 
 	// CO2 Sensor (SCD30)
-	writerData.value(airSensor.getCO2());			// default whole numbers
+	writerData.name("scd30").beginObject();
+		writerData.name("CO2").value(airSensor.getCO2());			// default whole numbers
+		writerData.name("T").value(airSensor.getTemperature());
+		writerData.name("H").value(airSensor.getHumidity());
+	writerData.endObject();
+
+	// A9G GPS
+	while (Serial1.available())
+	{
+		// Clear incoming buffer
+		char c = Serial1.read();
+	}
+	String gpsOutput = "";
+	delay(12s);
+	while (Serial1.available())
+	{
+		char c = Serial1.read();
+		gpsOutput += c;
+	}
+	writerData.name("gps").value(gpsOutput);
 
 	return writerData;
-}
-
-bool measurementCommand()
-{
-	return (singleMeasurement || continuousMeasurement);
 }
 
 void qwiicGetValue()
@@ -275,36 +310,22 @@ void qwiicTestForConnectivity()
 	//check here for an ACK from the slave, if no ACK don't allow change?
 	if (Wire.endTransmission() != 0) 
 	{
-		// Serial.println("Check connections. No slave attached.");
+		Serial.println("Check connections. No slave attached.");
 		while (1);
 	}
 	return;
 }
 
-JSONBufferWriter readSPS30(JSONBufferWriter writerData) 
+bool measurementCommand() 
 {
-	uint8_t ret;
-	struct sps_values val;
-
-	// loop to get data
-	do 
-	{
-		ret = sps30.GetValues(&val);
-	} while (ret != SPS30_ERR_OK);
-
-	// pm2 refers to PM2.5 reading
-	writerData.value(val.MassPM1);
-	writerData.value(val.MassPM2);
-	writerData.value(val.MassPM4);
-	writerData.value(val.MassPM10);
-	
-	return writerData;
+	return measureCommand;
 }
 
 void checkErrorReset() {
 	delay(5s);
 	if (sensorErrorCount == 5) 
 	{
+		Serial.println("reset");
 		System.reset();
 	}
 	return;
@@ -319,18 +340,19 @@ static void onDataReceived(const uint8_t* data, size_t len, const BlePeerDevice&
 		return;
 	}
 
-	// Single measurement mode
+	// Measurement mode 1 (Shut down sensors after)
 	if (data[0] == 0xff) 
 	{
-		singleMeasurement = true;
-		continuousMeasurement = false;
+		measureCommand = true;
+		sensorOffAfter = true;
 		return;
 	}
 
-	// Continuous measurement mode
+	// Measurement mode 2 (No shut down sensors after)
 	if (data[0] == 0x00) 
 	{
-		continuousMeasurement = true;
+		measureCommand = true;
+		sensorOffAfter = false;
 		return;
 	}
 }
